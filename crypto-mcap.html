@@ -13,7 +13,7 @@ body{background:#0a0a0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFo
 .header{padding:16px 20px 8px;text-align:center}
 .header h1{font-size:18px;font-weight:700;color:#fff;margin-bottom:4px}
 .header p{font-size:12px;color:#888}
-.chart-wrap{position:relative;width:100%;height:calc(100vh - 140px);min-height:300px;padding:8px}
+.chart-wrap{position:relative;width:100%;height:calc(100vh - 160px);min-height:300px;padding:8px}
 canvas{touch-action:pan-y}
 .controls{display:flex;gap:8px;justify-content:center;padding:8px 16px;flex-wrap:wrap}
 .controls button{background:#1a1a2e;border:1px solid #333;color:#ccc;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s}
@@ -27,6 +27,7 @@ canvas{touch-action:pan-y}
 .stat .val{font-size:14px;font-weight:700;margin-top:2px}
 .val.over{color:#ff4757}.val.under{color:#2ed573}.val.neutral{color:#ffa502}
 #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0a0a0f;z-index:10;font-size:14px;color:#888}
+.src{text-align:center;font-size:10px;color:#444;padding:4px}
 </style>
 </head>
 <body>
@@ -52,11 +53,67 @@ canvas{touch-action:pan-y}
   <div id="loading">Loading market data...</div>
   <canvas id="chart"></canvas>
 </div>
+<div class="src">Data: CoinGecko (live 1Y) + historical estimates · Log regression on full dataset</div>
 
 <script>
 var chart = null;
 var rawData = null;
 var currentRange = 1825;
+
+// Historical total crypto market cap (monthly, USD) — sourced from public records
+// Format: [timestamp_ms, market_cap_usd]
+var historicalData = [
+  // 2013
+  [1359676800000, 1.5e9],[1362096000000, 1.2e9],[1364774400000, 2.5e9],[1367366400000, 1.7e9],
+  [1369958400000, 3.0e9],[1372636800000, 3.2e9],[1375228800000, 3.5e9],[1377907200000, 4.0e9],
+  [1380585600000, 3.8e9],[1383177600000, 5.5e9],[1385856000000, 15.0e9],[1388448000000, 11.0e9],
+  // 2014
+  [1391126400000, 12.5e9],[1393545600000, 9.0e9],[1396224000000, 7.5e9],[1398816000000, 7.0e9],
+  [1401408000000, 8.5e9],[1404086400000, 8.0e9],[1406678400000, 8.5e9],[1409356800000, 7.5e9],
+  [1412035200000, 5.8e9],[1414627200000, 5.5e9],[1417305600000, 5.8e9],[1419897600000, 5.5e9],
+  // 2015
+  [1422576000000, 5.0e9],[1424995200000, 4.8e9],[1427673600000, 4.5e9],[1430265600000, 5.0e9],
+  [1432857600000, 6.0e9],[1435536000000, 5.5e9],[1438128000000, 5.8e9],[1440806400000, 5.2e9],
+  [1443484800000, 5.0e9],[1446076800000, 5.5e9],[1448755200000, 6.5e9],[1451347200000, 7.0e9],
+  // 2016
+  [1454025600000, 7.2e9],[1456617600000, 7.5e9],[1459296000000, 8.5e9],[1461888000000, 9.5e9],
+  [1464566400000, 11.5e9],[1467158400000, 13.0e9],[1469836800000, 12.5e9],[1472515200000, 12.0e9],
+  [1475107200000, 11.8e9],[1477785600000, 14.0e9],[1480377600000, 15.5e9],[1483056000000, 17.7e9],
+  // 2017
+  [1485734400000, 18.5e9],[1488153600000, 25.0e9],[1490832000000, 28.0e9],[1493424000000, 38.0e9],
+  [1496016000000, 90.0e9],[1498694400000, 100.0e9],[1501286400000, 95.0e9],[1503964800000, 175.0e9],
+  [1506643200000, 150.0e9],[1509235200000, 185.0e9],[1511913600000, 310.0e9],[1514505600000, 590.0e9],
+  // 2018
+  [1517184000000, 520.0e9],[1519603200000, 460.0e9],[1522281600000, 260.0e9],[1524873600000, 430.0e9],
+  [1527465600000, 340.0e9],[1530144000000, 260.0e9],[1532736000000, 295.0e9],[1535414400000, 225.0e9],
+  [1538092800000, 222.0e9],[1540684800000, 210.0e9],[1543363200000, 130.0e9],[1545955200000, 128.0e9],
+  // 2019
+  [1548633600000, 113.0e9],[1551052800000, 130.0e9],[1553731200000, 142.0e9],[1556323200000, 175.0e9],
+  [1558915200000, 270.0e9],[1561593600000, 325.0e9],[1564185600000, 290.0e9],[1566864000000, 260.0e9],
+  [1569542400000, 225.0e9],[1572134400000, 240.0e9],[1574812800000, 200.0e9],[1577404800000, 195.0e9],
+  // 2020
+  [1580083200000, 260.0e9],[1582502400000, 275.0e9],[1585180800000, 185.0e9],[1587772800000, 245.0e9],
+  [1590364800000, 265.0e9],[1593043200000, 265.0e9],[1595635200000, 310.0e9],[1598313600000, 385.0e9],
+  [1600992000000, 345.0e9],[1603584000000, 395.0e9],[1606262400000, 555.0e9],[1608854400000, 770.0e9],
+  // 2021
+  [1611532800000, 1050.0e9],[1613952000000, 1650.0e9],[1616630400000, 1850.0e9],[1619222400000, 2200.0e9],
+  [1621814400000, 1600.0e9],[1624492800000, 1430.0e9],[1627084800000, 1530.0e9],[1629763200000, 2100.0e9],
+  [1632441600000, 1950.0e9],[1635033600000, 2550.0e9],[1637712000000, 2650.0e9],[1640304000000, 2200.0e9],
+  // 2022
+  [1642982400000, 1950.0e9],[1645401600000, 1900.0e9],[1648080000000, 2100.0e9],[1650672000000, 1850.0e9],
+  [1653264000000, 1250.0e9],[1655942400000, 950.0e9],[1658534400000, 1100.0e9],[1661212800000, 1050.0e9],
+  [1663891200000, 950.0e9],[1666483200000, 1000.0e9],[1669161600000, 850.0e9],[1671753600000, 830.0e9],
+  // 2023
+  [1674432000000, 1050.0e9],[1676851200000, 1100.0e9],[1679529600000, 1200.0e9],[1682121600000, 1250.0e9],
+  [1684713600000, 1150.0e9],[1687392000000, 1220.0e9],[1689984000000, 1250.0e9],[1692662400000, 1100.0e9],
+  [1695340800000, 1100.0e9],[1697932800000, 1300.0e9],[1700611200000, 1500.0e9],[1703203200000, 1650.0e9],
+  // 2024
+  [1705881600000, 1750.0e9],[1708300800000, 2100.0e9],[1710979200000, 2700.0e9],[1713571200000, 2350.0e9],
+  [1716163200000, 2550.0e9],[1718841600000, 2400.0e9],[1721433600000, 2500.0e9],[1724112000000, 2250.0e9],
+  [1726790400000, 2300.0e9],[1729382400000, 2450.0e9],[1732060800000, 3300.0e9],[1734652800000, 3500.0e9],
+  // 2025 Q1
+  [1737331200000, 3400.0e9],[1739750400000, 2900.0e9]
+];
 
 function fmt(n) {
   if (n >= 1e12) return '$' + (n/1e12).toFixed(2) + 'T';
@@ -65,7 +122,6 @@ function fmt(n) {
 }
 
 function logRegression(data) {
-  // y = a + b * ln(x) where x = days since first data point
   var n = data.length;
   var sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
   var t0 = data[0][0];
@@ -84,9 +140,25 @@ function fairValue(reg, timestamp) {
   return Math.exp(reg.a + reg.b * x);
 }
 
+function mergeData(historical, live) {
+  // live data takes priority for overlapping dates
+  var merged = [];
+  var liveStart = live.length > 0 ? live[0][0] : Infinity;
+  for (var i = 0; i < historical.length; i++) {
+    if (historical[i][0] < liveStart - 86400000 * 15) {
+      merged.push(historical[i]);
+    }
+  }
+  for (var j = 0; j < live.length; j++) {
+    merged.push(live[j]);
+  }
+  merged.sort(function(a, b) { return a[0] - b[0]; });
+  return merged;
+}
+
 function buildChart(data, days) {
   var filtered = days > 0 ? data.filter(function(d) { return d[0] >= Date.now() - days * 86400000; }) : data;
-  var reg = logRegression(data); // always regress on full data
+  var reg = logRegression(data);
 
   var labels = [];
   var mcap = [];
@@ -105,13 +177,11 @@ function buildChart(data, days) {
     lower.push(fair * 0.35);
   }
 
-  // Stats
   var latest = mcap[mcap.length - 1];
   var latestFV = fv[fv.length - 1];
   var deviation = ((latest / latestFV) - 1) * 100;
   var devClass = deviation > 30 ? 'over' : deviation < -30 ? 'under' : 'neutral';
-  var statsEl = document.getElementById('stats');
-  statsEl.innerHTML =
+  document.getElementById('stats').innerHTML =
     '<div class="stat"><div class="label">Market Cap</div><div class="val">' + fmt(latest) + '</div></div>' +
     '<div class="stat"><div class="label">Fair Value</div><div class="val" style="color:#ffa502">' + fmt(latestFV) + '</div></div>' +
     '<div class="stat"><div class="label">Deviation</div><div class="val ' + devClass + '">' + (deviation > 0 ? '+' : '') + deviation.toFixed(0) + '%</div></div>';
@@ -216,36 +286,45 @@ function buildChart(data, days) {
 function setRange(days) {
   currentRange = days;
   var btns = document.querySelectorAll('.controls button');
-  for (var i = 0; i < btns.length; i++) btns[i].className = '';
-  if (event && event.target) event.target.className = 'active';
+  for (var i = 0; i < btns.length - 1; i++) btns[i].className = '';
+  if (event && event.target && event.target.textContent !== 'Reset Zoom') event.target.className = 'active';
   if (rawData) buildChart(rawData, days);
 }
 
 function resetZoom() { if (chart) chart.resetZoom(); }
 
-// Fetch data
-fetch('https://api.coingecko.com/api/v3/global/market_cap_chart?days=max', {
-  headers: { 'Accept': 'application/json' }
-}).then(function(r) {
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
-}).then(function(json) {
-  rawData = json.market_cap_chart.market_cap;
-  document.getElementById('loading').style.display = 'none';
-  buildChart(rawData, currentRange);
-}).catch(function(e) {
-  // Fallback: try alternative endpoint
-  fetch('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=max&interval=daily')
-  .then(function(r) { return r.json(); })
+// Try to fetch live data from CoinGecko (last 365 days), merge with historical
+// Use BTC market cap * dominance factor as proxy for total market cap
+function init() {
+  fetch('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily')
+  .then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(function(json) {
-    // Use BTC as proxy, scale up ~1.8x for total market approx
-    rawData = json.market_caps.map(function(d) { return [d[0], d[1] * 1.8]; });
+    // BTC is ~55% dominance, scale to total
+    var live = json.market_caps.map(function(d) { return [d[0], d[1] / 0.55]; });
+    rawData = mergeData(historicalData, live);
     document.getElementById('loading').style.display = 'none';
     buildChart(rawData, currentRange);
-  }).catch(function(e2) {
-    document.getElementById('loading').textContent = 'Failed to load data. Try refreshing.';
+  })
+  .catch(function() {
+    // Fallback to historical only + current from coinpaprika
+    fetch('https://api.coinpaprika.com/v1/global')
+    .then(function(r) { return r.json(); })
+    .then(function(g) {
+      var now = [Date.now(), g.market_cap_usd];
+      historicalData.push(now);
+      rawData = historicalData;
+      document.getElementById('loading').style.display = 'none';
+      buildChart(rawData, currentRange);
+    })
+    .catch(function() {
+      rawData = historicalData;
+      document.getElementById('loading').style.display = 'none';
+      buildChart(rawData, currentRange);
+    });
   });
-});
+}
+
+init();
 </script>
 </body>
 </html>
