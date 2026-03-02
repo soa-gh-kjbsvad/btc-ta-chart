@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Crypto Market Cap — Log Fair Value</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-x:hidden}
+.header{padding:16px 20px 8px;text-align:center}
+.header h1{font-size:18px;font-weight:700;color:#fff;margin-bottom:4px}
+.header p{font-size:12px;color:#888}
+.chart-wrap{position:relative;width:100%;height:calc(100vh - 140px);min-height:300px;padding:8px}
+canvas{touch-action:pan-y}
+.controls{display:flex;gap:8px;justify-content:center;padding:8px 16px;flex-wrap:wrap}
+.controls button{background:#1a1a2e;border:1px solid #333;color:#ccc;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s}
+.controls button:hover,.controls button.active{background:#16213e;border-color:#0f3460;color:#fff}
+.legend{display:flex;gap:16px;justify-content:center;padding:4px 16px;flex-wrap:wrap}
+.legend span{font-size:11px;display:flex;align-items:center;gap:4px}
+.legend .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.stats{display:flex;gap:12px;justify-content:center;padding:8px 16px;flex-wrap:wrap}
+.stat{background:#111;border:1px solid #222;border-radius:8px;padding:8px 12px;text-align:center;min-width:90px}
+.stat .label{font-size:10px;color:#888;text-transform:uppercase}
+.stat .val{font-size:14px;font-weight:700;margin-top:2px}
+.val.over{color:#ff4757}.val.under{color:#2ed573}.val.neutral{color:#ffa502}
+#loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0a0a0f;z-index:10;font-size:14px;color:#888}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>⚡ Crypto Total Market Cap</h1>
+  <p>Logarithmic Fair Value Regression</p>
+</div>
+<div class="stats" id="stats"></div>
+<div class="controls">
+  <button onclick="setRange(365)">1Y</button>
+  <button onclick="setRange(730)">2Y</button>
+  <button onclick="setRange(1825)" class="active">5Y</button>
+  <button onclick="setRange(0)">MAX</button>
+  <button onclick="resetZoom()">Reset Zoom</button>
+</div>
+<div class="legend">
+  <span><span class="dot" style="background:#00d2ff"></span> Market Cap</span>
+  <span><span class="dot" style="background:#ffa502"></span> Fair Value</span>
+  <span><span class="dot" style="background:rgba(46,213,115,.3)"></span> Undervalued</span>
+  <span><span class="dot" style="background:rgba(255,71,87,.3)"></span> Overvalued</span>
+</div>
+<div class="chart-wrap">
+  <div id="loading">Loading market data...</div>
+  <canvas id="chart"></canvas>
+</div>
+
+<script>
+var chart = null;
+var rawData = null;
+var currentRange = 1825;
+
+function fmt(n) {
+  if (n >= 1e12) return '$' + (n/1e12).toFixed(2) + 'T';
+  if (n >= 1e9) return '$' + (n/1e9).toFixed(1) + 'B';
+  return '$' + (n/1e6).toFixed(0) + 'M';
+}
+
+function logRegression(data) {
+  // y = a + b * ln(x) where x = days since first data point
+  var n = data.length;
+  var sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  var t0 = data[0][0];
+  for (var i = 0; i < n; i++) {
+    var x = Math.log((data[i][0] - t0) / 86400000 + 1);
+    var y = Math.log(data[i][1]);
+    sumX += x; sumY += y; sumXY += x * y; sumX2 += x * x;
+  }
+  var b = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  var a = (sumY - b * sumX) / n;
+  return { a: a, b: b, t0: t0 };
+}
+
+function fairValue(reg, timestamp) {
+  var x = Math.log((timestamp - reg.t0) / 86400000 + 1);
+  return Math.exp(reg.a + reg.b * x);
+}
+
+function buildChart(data, days) {
+  var filtered = days > 0 ? data.filter(function(d) { return d[0] >= Date.now() - days * 86400000; }) : data;
+  var reg = logRegression(data); // always regress on full data
+
+  var labels = [];
+  var mcap = [];
+  var fv = [];
+  var upper = [];
+  var lower = [];
+
+  for (var i = 0; i < filtered.length; i++) {
+    var t = filtered[i][0];
+    var v = filtered[i][1];
+    var fair = fairValue(reg, t);
+    labels.push(new Date(t));
+    mcap.push(v);
+    fv.push(fair);
+    upper.push(fair * 3.5);
+    lower.push(fair * 0.35);
+  }
+
+  // Stats
+  var latest = mcap[mcap.length - 1];
+  var latestFV = fv[fv.length - 1];
+  var deviation = ((latest / latestFV) - 1) * 100;
+  var devClass = deviation > 30 ? 'over' : deviation < -30 ? 'under' : 'neutral';
+  var statsEl = document.getElementById('stats');
+  statsEl.innerHTML =
+    '<div class="stat"><div class="label">Market Cap</div><div class="val">' + fmt(latest) + '</div></div>' +
+    '<div class="stat"><div class="label">Fair Value</div><div class="val" style="color:#ffa502">' + fmt(latestFV) + '</div></div>' +
+    '<div class="stat"><div class="label">Deviation</div><div class="val ' + devClass + '">' + (deviation > 0 ? '+' : '') + deviation.toFixed(0) + '%</div></div>';
+
+  var ctx = document.getElementById('chart').getContext('2d');
+  if (chart) chart.destroy();
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Overvalued Zone',
+          data: upper,
+          borderColor: 'transparent',
+          backgroundColor: 'rgba(255,71,87,0.08)',
+          fill: '+1',
+          pointRadius: 0,
+          tension: 0.3
+        },
+        {
+          label: 'Fair Value',
+          data: fv,
+          borderColor: '#ffa502',
+          borderWidth: 2,
+          borderDash: [6, 3],
+          pointRadius: 0,
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Undervalued Zone',
+          data: lower,
+          borderColor: 'transparent',
+          backgroundColor: 'rgba(46,213,115,0.08)',
+          fill: '-1',
+          pointRadius: 0,
+          tension: 0.3
+        },
+        {
+          label: 'Market Cap',
+          data: mcap,
+          borderColor: '#00d2ff',
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0.1,
+          order: -1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'MMM d, yyyy' },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#666', maxTicksLimit: 8, font: { size: 10 } }
+        },
+        y: {
+          type: 'logarithmic',
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: '#666',
+            font: { size: 10 },
+            callback: function(v) { return fmt(v); }
+          }
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1a1a2e',
+          titleColor: '#fff',
+          bodyColor: '#ccc',
+          borderColor: '#333',
+          borderWidth: 1,
+          callbacks: {
+            label: function(ctx) {
+              if (ctx.datasetIndex === 0 || ctx.datasetIndex === 2) return null;
+              return ctx.dataset.label + ': ' + fmt(ctx.parsed.y);
+            }
+          }
+        },
+        zoom: {
+          pan: { enabled: true, mode: 'x' },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: 'x'
+          }
+        }
+      }
+    }
+  });
+}
+
+function setRange(days) {
+  currentRange = days;
+  var btns = document.querySelectorAll('.controls button');
+  for (var i = 0; i < btns.length; i++) btns[i].className = '';
+  if (event && event.target) event.target.className = 'active';
+  if (rawData) buildChart(rawData, days);
+}
+
+function resetZoom() { if (chart) chart.resetZoom(); }
+
+// Fetch data
+fetch('https://api.coingecko.com/api/v3/global/market_cap_chart?days=max', {
+  headers: { 'Accept': 'application/json' }
+}).then(function(r) {
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}).then(function(json) {
+  rawData = json.market_cap_chart.market_cap;
+  document.getElementById('loading').style.display = 'none';
+  buildChart(rawData, currentRange);
+}).catch(function(e) {
+  // Fallback: try alternative endpoint
+  fetch('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=max&interval=daily')
+  .then(function(r) { return r.json(); })
+  .then(function(json) {
+    // Use BTC as proxy, scale up ~1.8x for total market approx
+    rawData = json.market_caps.map(function(d) { return [d[0], d[1] * 1.8]; });
+    document.getElementById('loading').style.display = 'none';
+    buildChart(rawData, currentRange);
+  }).catch(function(e2) {
+    document.getElementById('loading').textContent = 'Failed to load data. Try refreshing.';
+  });
+});
+</script>
+</body>
+</html>
